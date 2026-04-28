@@ -41,7 +41,7 @@ Khi bạn test ứng dụng trên Web và AI đoán sai (VD: thực tế là Vui
 
 1. **Thu thập dữ liệu:** Hệ thống web sẽ tự động lưu ảnh lỗi về thư mục `feedback_images/` và cập nhật file `lich_su_AI.csv` ngay trên Colab của bạn.
 2. **Retrain (Học lại):** Quay lại file Colab, cuộn xuống Cell có tiêu đề **"Retrain"**. Chạy Cell này. AI sẽ tự động đọc file CSV, học lại chính những tấm ảnh nó vừa đoán sai (Fine-tuning) và xuất ra một phiên bản mới thông minh hơn (thường lưu dưới tên `emotion_model_v2.h5`).
-3. **Cập nhật Web:** Mở lại Cell `%%writefile app.py`, sửa biến `MODEL_FILENAME` thành tên file `.h5` mới, chạy lại Cell đó và cell khởi động lại Server Web để AI nhận diện đúng 100%!
+3. **Cập nhật Web:** chạy lại Cell `%%writefile app.py` ở dưới cell retrai, chạy lại Cell đó và cell khởi động lại Server Web để AI nhận diện đúng 100%!
 
 ## ✍️ Tác giả
 * **Triệu Duy Khang** - Sinh viên Kỹ thuật phần mềm (ĐH Nguyễn Tất Thành)
