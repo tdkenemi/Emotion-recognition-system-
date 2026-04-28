@@ -22,10 +22,10 @@ Dự án này được tối ưu để **không cần phải train lại từ đ
 ### Bước 1: Chuẩn bị môi trường trên Google Colab
 1. Tải file mã nguồn `.ipynb` từ kho lưu trữ này và mở bằng [Google Colab](https://colab.research.google.com/).
 2. **Upload mô hình có sẵn:** Tải file `emotion_model.h5` (hoặc `emotion_model_v2.h5`) và file `haarcascade_frontalface_default.xml` từ máy tính lên thư mục gốc của Colab.
-3. **BỎ QUA** các Cell tải dữ liệu Kaggle và Train mô hình từ đầu (Bước 1, 2, 3, 4 trong file gốc). 
+3. **BỎ QUA** các Cell huấn luyện ở bước 3 và 4 chỉ chạy cell tải dữ liệu Kaggle và bước 2. 
 
 ### Bước 2: Load mô hình và Tạo giao diện Web
-1. Chạy Cell chứa lệnh `load_model('emotion_model_v2.h5')` để đưa não bộ AI vào trạng thái sẵn sàng.
+1. Chạy Cell chứa lệnh `load_model('emotion_model.h5')` để đưa não bộ AI vào trạng thái sẵn sàng.
 2. Chạy Cell chứa lệnh `%%writefile app.py`. Colab sẽ tự động tạo ra một file giao diện Web Streamlit hoàn chỉnh cho bạn.
 
 ### Bước 3: Khởi chạy Máy chủ Web qua Ngrok
