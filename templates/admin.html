@@ -1,0 +1,198 @@
+<!DOCTYPE html>
+<html lang="vi">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Admin Dashboard — EmotionAI</title>
+    <meta name="robots" content="noindex, nofollow">
+    <link rel="icon" href="/static/img/favicon.svg" type="image/svg+xml">
+    <link href="https://fonts.googleapis.com/css2?family=Outfit:wght@300;400;600;700;900&family=Inter:wght@300;400;500;600&display=swap" rel="stylesheet">
+    <link rel="stylesheet" href="/static/css/style.css">
+    <script src="https://cdn.jsdelivr.net/npm/chart.js" defer></script>
+</head>
+<body>
+<div class="bg-mesh"></div>
+<div class="bg-grid"></div>
+<div class="toast-container" id="toast-container"></div>
+
+<!-- Navbar -->
+<nav class="navbar" role="navigation">
+    <a href="/" class="nav-logo" aria-label="Quay về trang chủ">
+        <span class="logo-icon">🎭</span>
+        EmotionAI <span style="font-size:0.7rem;color:var(--text-muted);margin-left:6px;">Admin</span>
+    </a>
+    <div class="nav-links">
+        <button class="btn btn-secondary" id="btn-auto-refresh" style="padding:6px 12px;font-size:0.8rem;">🔄 Auto-Refresh: TẮT</button>
+        <button class="btn btn-accent" id="btn-export-csv" style="padding:6px 12px;font-size:0.8rem;">📥 Xuất CSV</button>
+        <a href="/api/docs" class="nav-link" target="_blank">API Docs</a>
+        <a href="/" class="nav-link">← Trang Chủ</a>
+        <button class="btn btn-danger" id="btn-logout" style="padding:6px 12px;font-size:0.8rem;">Đăng Xuất</button>
+    </div>
+</nav>
+
+<div class="page-wrapper">
+
+    <!-- Header -->
+    <div class="dashboard-header">
+        <div>
+            <h1 class="hero-title" style="font-size:2rem;margin-bottom:4px;">
+                Thống kê <span class="gradient-text">Hệ thống</span>
+            </h1>
+            <p style="color:var(--text-muted);font-size:0.88rem;" id="last-updated-text">Đang tải...</p>
+        </div>
+        <button class="btn btn-primary" id="btn-refresh-now" style="padding:8px 18px;">🔃 Làm mới</button>
+    </div>
+
+    <!-- KPI Cards -->
+    <div class="stats-grid" id="stats-grid">
+        <div class="stat-card" style="--stat-color:#c084fc">
+            <div class="stat-icon">👁️</div>
+            <div class="stat-value" id="stat-total">—</div>
+            <div class="stat-label">Tổng lượt phân tích</div>
+        </div>
+        <div class="stat-card" style="--stat-color:#34d399">
+            <div class="stat-icon">💬</div>
+            <div class="stat-value" id="stat-feedback">—</div>
+            <div class="stat-label">Lượt Feedback</div>
+        </div>
+        <div class="stat-card" style="--stat-color:#fbbf24">
+            <div class="stat-icon">🎯</div>
+            <div class="stat-value" id="stat-accuracy">—</div>
+            <div class="stat-label">Độ chính xác AI</div>
+        </div>
+        <div class="stat-card" style="--stat-color:#60a5fa">
+            <div class="stat-icon">👤</div>
+            <div class="stat-value" id="stat-users">—</div>
+            <div class="stat-label">Người dùng</div>
+        </div>
+    </div>
+
+    <!-- Admin Tabs -->
+    <div class="admin-tabs" id="admin-tabs">
+        <button class="admin-tab-btn active" data-tab="overview">📊 Tổng quan</button>
+        <button class="admin-tab-btn" data-tab="history">📋 Lịch sử</button>
+        <button class="admin-tab-btn" data-tab="feedback">💬 Feedback</button>
+        <button class="admin-tab-btn" data-tab="users">👤 Users</button>
+    </div>
+
+    <!-- TAB: OVERVIEW -->
+    <div id="tab-overview" class="admin-tab-content active">
+        <div class="charts-grid">
+            <!-- Doughnut Chart -->
+            <div class="chart-card">
+                <div class="chart-card-title">Tỉ lệ cảm xúc</div>
+                <div class="chart-wrap" style="height:280px;">
+                    <canvas id="chart-doughnut"></canvas>
+                </div>
+            </div>
+            <!-- Line Chart -->
+            <div class="chart-card">
+                <div class="chart-card-title">Xu hướng 7 ngày gần nhất</div>
+                <div class="chart-wrap" style="height:280px;">
+                    <canvas id="chart-trend"></canvas>
+                </div>
+            </div>
+        </div>
+        <!-- Bar Chart -->
+        <div class="chart-card" style="margin-top:20px;">
+            <div class="chart-card-title">So sánh số lượng theo cảm xúc</div>
+            <div class="chart-wrap" style="height:200px;">
+                <canvas id="chart-bar"></canvas>
+            </div>
+        </div>
+    </div>
+
+    <!-- TAB: HISTORY -->
+    <div id="tab-history" class="admin-tab-content hidden">
+        <div class="table-card">
+            <div class="table-header">
+                <div class="table-title">Lịch sử Phân tích</div>
+                <div class="table-toolbar">
+                    <select class="filter-select" id="filter-emotion">
+                        <option value="">Tất cả cảm xúc</option>
+                        <option>Tức giận</option>
+                        <option>Ghê tởm</option>
+                        <option>Sợ hãi</option>
+                        <option>Vui vẻ</option>
+                        <option>Bình thường</option>
+                        <option>Buồn bã</option>
+                        <option>Bất ngờ</option>
+                    </select>
+                    <input type="text" class="filter-select" id="search-history" placeholder="🔍 Tìm theo tên file..." style="min-width:200px;">
+                </div>
+            </div>
+            <div class="table-wrap">
+                <table class="data-table" aria-label="Lịch sử phân tích">
+                    <thead>
+                        <tr>
+                            <th>Thời gian</th>
+                            <th>Tên ảnh</th>
+                            <th>Cảm xúc AI</th>
+                            <th>Độ tự tin</th>
+                            <th>User</th>
+                            <th>IP</th>
+                            <th>Xóa</th>
+                        </tr>
+                    </thead>
+                    <tbody id="tbody-history"></tbody>
+                </table>
+            </div>
+            <div id="pagination-history" class="pagination-wrap"></div>
+        </div>
+    </div>
+
+    <!-- TAB: FEEDBACK -->
+    <div id="tab-feedback" class="admin-tab-content hidden">
+        <div class="table-card">
+            <div class="table-header">
+                <div class="table-title">Feedback Người Dùng</div>
+            </div>
+            <div class="table-wrap">
+                <table class="data-table" aria-label="Feedback">
+                    <thead>
+                        <tr>
+                            <th>Thời gian</th>
+                            <th>Tên ảnh</th>
+                            <th>AI dự đoán</th>
+                            <th>Thực tế</th>
+                            <th>Kết quả</th>
+                            <th>User</th>
+                        </tr>
+                    </thead>
+                    <tbody id="tbody-feedback"></tbody>
+                </table>
+            </div>
+        </div>
+    </div>
+
+    <!-- TAB: USERS -->
+    <div id="tab-users" class="admin-tab-content hidden">
+        <div class="table-card">
+            <div class="table-header">
+                <div class="table-title">Quản lý Người Dùng</div>
+            </div>
+            <div class="table-wrap">
+                <table class="data-table" aria-label="Danh sách users">
+                    <thead>
+                        <tr>
+                            <th>Tên đăng nhập</th>
+                            <th>Phân quyền</th>
+                            <th>Ngày tạo</th>
+                        </tr>
+                    </thead>
+                    <tbody id="tbody-users"></tbody>
+                </table>
+            </div>
+            <div id="pagination-users" class="pagination-wrap"></div>
+        </div>
+    </div>
+
+</div>
+
+<footer class="footer" style="margin-top:40px;">
+    <p>🎭 <strong>EmotionAI</strong> v3.1 Admin Dashboard · Triệu Duy Khang · ĐH Nguyễn Tất Thành</p>
+</footer>
+
+<script src="/static/js/admin.js"></script>
+</body>
+</html>

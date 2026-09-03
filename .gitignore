@@ -1,0 +1,55 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+*.egg
+*.egg-info/
+dist/
+build/
+.eggs/
+
+# Environments
+.env
+.env.local
+.env.*.local
+env/
+venv/
+.venv/
+ENV/
+
+# Model file (too large for GitHub, use Git LFS or download separately)
+emotion_model.h5
+*.h5
+*.pkl
+*.pt
+
+# Logs
+*.log
+logs/
+
+# Data / Uploads
+uploads/
+*.csv
+lich_su_AI.csv
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Node
+node_modules/
+
+# Pytest
+.pytest_cache/
+htmlcov/
+.coverage
+
+# MyPy
+.mypy_cache/
