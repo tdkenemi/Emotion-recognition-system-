@@ -8,7 +8,8 @@ from datetime import datetime
 
 class UserCreate(BaseModel):
     username: str = Field(..., min_length=3, max_length=30, description="Tên đăng nhập")
-    password: str = Field(..., min_length=8, description="Mật khẩu ít nhất 8 ký tự")
+    email: Optional[str] = Field(None, description="Email (cho đăng nhập Google/Quên MK)")
+    password: Optional[str] = Field(None, description="Mật khẩu (Không bắt buộc với Google Auth)")
 
     @field_validator('username')
     @classmethod
@@ -21,9 +22,16 @@ class UserCreate(BaseModel):
     @field_validator('password')
     @classmethod
     def password_strength(cls, v):
-        if len(v) < 8:
+        if v is not None and len(v) < 8:
             raise ValueError('Mật khẩu phải có ít nhất 8 ký tự')
         return v
+
+class ForgotPasswordRequest(BaseModel):
+    email: str
+
+class ResetPasswordRequest(BaseModel):
+    token: str
+    new_password: str = Field(..., min_length=8)
 
 
 class UserLogin(BaseModel):

@@ -24,8 +24,9 @@ def test_register_login():
     # Test register
     test_user = "testuser123"
     test_pass = "password123"
+    test_email = "testuser123@example.com"
     
-    res_reg = client.post("/api/register", data={"username": test_user, "password": test_pass})
+    res_reg = client.post("/api/register", data={"username": test_user, "password": test_pass, "email": test_email})
     # If already exists, it will be 400. Otherwise 200.
     assert res_reg.status_code in [200, 400]
     

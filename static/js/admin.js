@@ -64,6 +64,19 @@
         return (...args) => { clearTimeout(timer); timer = setTimeout(() => fn(...args), delay); };
     }
 
+    // =========================================================================
+    // SECURITY: HTML escape để ngăn Stored XSS
+    // =========================================================================
+    function escapeHtml(str) {
+        if (str === null || str === undefined) return '';
+        return String(str)
+            .replace(/&/g, '&amp;')
+            .replace(/</g, '&lt;')
+            .replace(/>/g, '&gt;')
+            .replace(/"/g, '&quot;')
+            .replace(/'/g, '&#x27;');
+    }
+
     function showToast(message, type = 'success') {
         const icons = { success: '✅', error: '❌', warning: '⚠️', info: 'ℹ️' };
         const t = document.createElement('div');
@@ -279,18 +292,23 @@
         if (!tbody) return;
         tbody.innerHTML = state.history.length ? state.history.map(row => `
             <tr>
-                <td>${row.time}</td>
-                <td style="max-width:140px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;" title="${row.filename}">${row.filename}</td>
-                <td><span class="badge badge-ai">${getEmoji(row.ai_prediction)} ${row.ai_prediction}</span></td>
+                <td>${escapeHtml(row.time)}</td>
+                <td style="max-width:140px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;" title="${escapeHtml(row.filename)}">${escapeHtml(row.filename)}</td>
+                <td><span class="badge badge-ai">${getEmoji(row.ai_prediction)} ${escapeHtml(row.ai_prediction)}</span></td>
                 <td>${row.confidence ? row.confidence.toFixed(1) + '%' : '-'}</td>
-                <td>${row.user || '<span style="color:var(--text-muted)">Khách</span>'}</td>
-                <td style="font-size:0.8rem;color:var(--text-muted);">${row.ip || '-'}</td>
+                <td>${row.user ? escapeHtml(row.user) : '<span style="color:var(--text-muted)">Khách</span>'}</td>
+                <td style="font-size:0.8rem;color:var(--text-muted);">${escapeHtml(row.ip) || '-'}</td>
                 <td>
                     <button class="btn btn-danger" style="padding:3px 8px;font-size:0.75rem;"
-                        onclick="deleteRecord('${row._id}', this)">🗑️</button>
+                        data-id="${escapeHtml(row._id)}">🗑️</button>
                 </td>
             </tr>
         `).join('') : emptyRow(7, 'Chưa có lịch sử phân tích');
+
+        // Gán event listener sau khi render — tránh inline onclick XSS
+        tbody.querySelectorAll('button[data-id]').forEach(btn => {
+            btn.addEventListener('click', () => deleteRecord(btn.dataset.id, btn));
+        });
     }
 
     function renderFeedbackTable() {
@@ -298,12 +316,12 @@
         if (!tbody) return;
         tbody.innerHTML = state.feedbacks.length ? state.feedbacks.map(row => `
             <tr>
-                <td>${row.time}</td>
-                <td style="max-width:120px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">${row.filename}</td>
-                <td><span class="badge badge-ai">${getEmoji(row.ai_prediction)} ${row.ai_prediction}</span></td>
-                <td><span class="badge ${row.is_correct ? 'badge-correct' : 'badge-wrong'}">${getEmoji(row.correct_emotion)} ${row.correct_emotion}</span></td>
+                <td>${escapeHtml(row.time)}</td>
+                <td style="max-width:120px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">${escapeHtml(row.filename)}</td>
+                <td><span class="badge badge-ai">${getEmoji(row.ai_prediction)} ${escapeHtml(row.ai_prediction)}</span></td>
+                <td><span class="badge ${row.is_correct ? 'badge-correct' : 'badge-wrong'}">${getEmoji(row.correct_emotion)} ${escapeHtml(row.correct_emotion)}</span></td>
                 <td>${row.is_correct ? '✅ Đúng' : '❌ Sai'}</td>
-                <td>${row.user || '<span style="color:var(--text-muted)">Khách</span>'}</td>
+                <td>${row.user ? escapeHtml(row.user) : '<span style="color:var(--text-muted)">Khách</span>'}</td>
             </tr>
         `).join('') : emptyRow(6, 'Chưa có feedback nào');
     }
@@ -313,9 +331,9 @@
         if (!tbody) return;
         tbody.innerHTML = state.users.length ? state.users.map(u => `
             <tr>
-                <td><strong>${u.username}</strong></td>
+                <td><strong>${escapeHtml(u.username)}</strong></td>
                 <td><span class="badge ${u.role === 'admin' ? 'badge-ai' : 'badge-pending'}">${u.role === 'admin' ? '👑 Admin' : '👤 User'}</span></td>
-                <td style="color:var(--text-muted);font-size:0.88rem;">${u.created_at || '—'}</td>
+                <td style="color:var(--text-muted);font-size:0.88rem;">${escapeHtml(u.created_at) || '—'}</td>
             </tr>
         `).join('') : emptyRow(3, 'Chưa có người dùng');
     }
@@ -369,7 +387,7 @@
     // =========================================================================
     // DELETE RECORD
     // =========================================================================
-    window.deleteRecord = async function(id, btn) {
+    async function deleteRecord(id, btn) {
         if (!confirm('Xác nhận xóa bản ghi này?')) return;
         btn.disabled = true;
         btn.innerText = '...';
@@ -391,7 +409,7 @@
             btn.disabled = false;
             btn.innerText = '🗑️';
         }
-    };
+    }
 
     // =========================================================================
     // AUTO REFRESH

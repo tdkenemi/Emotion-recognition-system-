@@ -4,7 +4,7 @@ Tác giả: Triệu Duy Khang | ĐH Nguyễn Tất Thành - Khoa CNTT
 """
 from fastapi import FastAPI, UploadFile, File, Form, HTTPException, Request, Depends, status
 from fastapi.staticfiles import StaticFiles
-from fastapi.responses import HTMLResponse, JSONResponse
+from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse
 from fastapi.templating import Jinja2Templates
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.security import OAuth2PasswordRequestForm
@@ -19,6 +19,7 @@ import time
 import logging
 from pathlib import Path
 from typing import List, Optional
+import httpx
 
 # =====================================================================
 # SETUP LOGGING
@@ -38,9 +39,11 @@ from backend.db import history_collection, feedback_collection, users_collection
 from backend.auth import (
     get_password_hash, verify_password, create_access_token,
     get_current_user, get_current_admin, get_optional_user,
-    check_login_rate_limit, clear_login_attempts
+    check_login_rate_limit, clear_login_attempts,
+    check_register_rate_limit, check_forgot_password_rate_limit
 )
-from backend.models import UserCreate, FeedbackCreate
+from backend.models import UserCreate, FeedbackCreate, ForgotPasswordRequest, ResetPasswordRequest
+from backend.auth import generate_reset_token, send_reset_email
 
 # =====================================================================
 # SERVER START TIME (for uptime tracking)
@@ -127,6 +130,7 @@ async def security_and_logging_middleware(request: Request, call_next):
     response.headers["X-Frame-Options"] = "SAMEORIGIN"
     response.headers["X-XSS-Protection"] = "1; mode=block"
     response.headers["Referrer-Policy"] = "strict-origin-when-cross-origin"
+    response.headers["Content-Security-Policy"] = "default-src 'self'; script-src 'self' 'unsafe-inline' https://cdn.jsdelivr.net; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com https://cdn.jsdelivr.net; font-src 'self' https://fonts.gstatic.com; img-src 'self' data: https:; connect-src 'self'"
     response.headers["X-Request-ID"] = req_id
 
     # Skip logging for static files
@@ -181,16 +185,53 @@ async def home(request: Request):
     return templates.TemplateResponse("index.html", {"request": request, "total_analyses": total})
 
 @app.get("/admin", response_class=HTMLResponse, include_in_schema=False)
-async def admin(request: Request):
+async def admin_page(request: Request):
+    """
+    Trang Admin Dashboard — Yêu cầu JWT token hợp lệ với role='admin'.
+    Token được đọc từ cookie 'emotionai_token' (ưu tiên) hoặc Authorization header.
+    """
+    from jose import JWTError, jwt as jose_jwt
+    from backend.auth import SECRET_KEY, ALGORITHM
+
+    token = None
+
+    # Ưu tiên đọc từ cookie (sau khi Issue #5 chuyển sang cookie)
+    token = request.cookies.get("emotionai_token")
+
+    # Fallback: đọc từ Authorization header
+    if not token:
+        auth_header = request.headers.get("Authorization", "")
+        if auth_header.startswith("Bearer "):
+            token = auth_header[7:]
+
+    if not token:
+        return RedirectResponse("/?error=login_required", status_code=302)
+
+    try:
+        payload = jose_jwt.decode(token, SECRET_KEY, algorithms=[ALGORITHM])
+        role = payload.get("role", "user")
+        if role != "admin":
+            return RedirectResponse("/?error=forbidden", status_code=302)
+    except JWTError:
+        return RedirectResponse("/?error=session_expired", status_code=302)
+
     return templates.TemplateResponse("admin.html", {"request": request})
 
 # =====================================================================
 # AUTH API
 # =====================================================================
 @app.post("/api/register", tags=["Auth"], summary="Đăng ký tài khoản mới")
-async def register(request: Request, form_data: OAuth2PasswordRequestForm = Depends()):
-    username = form_data.username.strip().lower()
-    password = form_data.password
+async def register(
+    request: Request,
+    username: str = Form(...),
+    password: str = Form(...),
+    email: str = Form(...)
+):
+    client_ip = request.client.host
+    check_register_rate_limit(client_ip)
+
+    username = username.strip().lower()
+    email = email.strip().lower()
 
     # Validate
     if len(username) < 3 or len(username) > 30:
@@ -200,13 +241,18 @@ async def register(request: Request, form_data: OAuth2PasswordRequestForm = Depe
     if not username.replace('_', '').isalnum():
         raise HTTPException(status_code=422, detail="Tên đăng nhập chỉ được dùng chữ, số và dấu gạch dưới")
 
-    existing = users_collection.find_one({"username": username})
+    existing = users_collection.find_one({"$or": [{"username": username}, {"email": email}]})
     if existing:
-        raise HTTPException(status_code=409, detail="Tên đăng nhập đã được sử dụng")
+        if existing.get("username") == username:
+            raise HTTPException(status_code=409, detail="Tên đăng nhập đã được sử dụng")
+        else:
+            raise HTTPException(status_code=409, detail="Email đã được sử dụng")
 
     users_collection.insert_one({
         "username": username,
+        "email": email,
         "password": get_password_hash(password),
+        "auth_provider": "local",
         "role": "user",
         "created_at": datetime.now()
     })
@@ -231,16 +277,165 @@ async def login(request: Request, form_data: OAuth2PasswordRequestForm = Depends
     clear_login_attempts(client_ip)
     access_token = create_access_token(data={"sub": user["username"], "role": user.get("role", "user")})
     logger.info(f"User logged in: {username} from {client_ip}")
-    return {
+    
+    response = JSONResponse(content={
         "access_token": access_token,
         "token_type": "bearer",
         "username": user["username"],
         "role": user.get("role", "user")
-    }
+    })
+    
+    # Set HTTP-only cookie for server-side auth (like Google OAuth)
+    response.set_cookie(
+        key="emotionai_token",
+        value=access_token,
+        httponly=True,
+        samesite="lax",
+        secure=False, # Set True if using HTTPS
+        max_age=1440 * 60
+    )
+    return response
 
 @app.get("/api/me", tags=["Auth"], summary="Lấy thông tin user hiện tại")
 async def get_me(current_user: dict = Depends(get_current_user)):
     return current_user
+
+@app.post("/api/forgot-password", tags=["Auth"], summary="Yêu cầu gửi mail quên mật khẩu")
+async def forgot_password(req: ForgotPasswordRequest, request: Request):
+    client_ip = request.client.host
+    check_forgot_password_rate_limit(client_ip)
+
+    email = req.email.strip().lower()
+    user = users_collection.find_one({"email": email})
+    if not user:
+        # Để bảo mật, không trả về lỗi "email không tồn tại"
+        return {"message": "Nếu email tồn tại trong hệ thống, chúng tôi đã gửi mã xác nhận."}
+    
+    token = generate_reset_token()
+    users_collection.update_one(
+        {"_id": user["_id"]},
+        {"$set": {"reset_token": token, "reset_token_exp": datetime.now().timestamp() + 900}} # 15 minutes
+    )
+    
+    success = send_reset_email(email, token)
+    if success:
+        return {"message": "Nếu email tồn tại trong hệ thống, chúng tôi đã gửi mã xác nhận."}
+    else:
+        raise HTTPException(status_code=500, detail="Lỗi hệ thống khi gửi email.")
+
+@app.post("/api/reset-password", tags=["Auth"], summary="Đặt lại mật khẩu")
+async def reset_password(req: ResetPasswordRequest):
+    user = users_collection.find_one({
+        "reset_token": req.token,
+        "reset_token_exp": {"$gt": datetime.now().timestamp()}
+    })
+    
+    if not user:
+        raise HTTPException(status_code=400, detail="Mã xác nhận không hợp lệ hoặc đã hết hạn.")
+    
+    users_collection.update_one(
+        {"_id": user["_id"]},
+        {
+            "$set": {"password": get_password_hash(req.new_password)},
+            "$unset": {"reset_token": "", "reset_token_exp": ""}
+        }
+    )
+    return {"message": "Đặt lại mật khẩu thành công! Hãy đăng nhập lại."}
+
+# =====================================================================
+# GOOGLE OAUTH2
+# =====================================================================
+GOOGLE_CLIENT_ID = os.getenv("GOOGLE_CLIENT_ID", "")
+GOOGLE_CLIENT_SECRET = os.getenv("GOOGLE_CLIENT_SECRET", "")
+GOOGLE_REDIRECT_URI = os.getenv("GOOGLE_REDIRECT_URI", "http://localhost:8000/api/auth/google/callback")
+
+@app.get("/api/auth/google/login", tags=["Auth"], summary="Redirect to Google Login")
+async def google_login():
+    if not GOOGLE_CLIENT_ID:
+        raise HTTPException(status_code=500, detail="Tính năng đăng nhập Google chưa được cấu hình. Vui lòng thêm GOOGLE_CLIENT_ID vào file .env")
+    
+    url = f"https://accounts.google.com/o/oauth2/v2/auth?response_type=code&client_id={GOOGLE_CLIENT_ID}&redirect_uri={GOOGLE_REDIRECT_URI}&scope=openid%20email%20profile&access_type=offline"
+    return RedirectResponse(url)
+
+@app.get("/api/auth/google/callback", tags=["Auth"], summary="Google Auth Callback", include_in_schema=False)
+async def google_callback(code: str, request: Request):
+    if not code:
+        raise HTTPException(status_code=400, detail="Thiếu code xác thực từ Google")
+    
+    # 1. Exchange code for access_token
+    token_url = "https://oauth2.googleapis.com/token"
+    token_data = {
+        "code": code,
+        "client_id": GOOGLE_CLIENT_ID,
+        "client_secret": GOOGLE_CLIENT_SECRET,
+        "redirect_uri": GOOGLE_REDIRECT_URI,
+        "grant_type": "authorization_code",
+    }
+    async with httpx.AsyncClient() as client:
+        token_res = await client.post(token_url, data=token_data)
+        if token_res.status_code != 200:
+            logger.error(f"Google token error: {token_res.text}")
+            raise HTTPException(status_code=400, detail="Xác thực Google thất bại (Lỗi cấp token)")
+        
+        token_json = token_res.json()
+        access_token = token_json.get("access_token")
+        
+        # 2. Get user info
+        user_info_res = await client.get(
+            "https://www.googleapis.com/oauth2/v3/userinfo",
+            headers={"Authorization": f"Bearer {access_token}"}
+        )
+        if user_info_res.status_code != 200:
+            raise HTTPException(status_code=400, detail="Không lấy được thông tin từ Google")
+        
+        user_info = user_info_res.json()
+        email = user_info.get("email")
+        name = user_info.get("name") or email.split("@")[0]
+        
+    if not email:
+        raise HTTPException(status_code=400, detail="Tài khoản Google không có email")
+    
+    # 3. Find or create user
+    user = users_collection.find_one({"email": email})
+    if not user:
+        # Kiểm tra username trùng lặp
+        base_username = name.replace(" ", "_").lower()
+        username = base_username
+        suffix = 1
+        while users_collection.find_one({"username": username}):
+            username = f"{base_username}_{suffix}"
+            suffix += 1
+            
+        new_user = {
+            "username": username,
+            "email": email,
+            "password": "", # Đăng nhập bằng Google không cần password local
+            "auth_provider": "google",
+            "role": "user",
+            "created_at": datetime.now()
+        }
+        users_collection.insert_one(new_user)
+        user = new_user
+        logger.info(f"New user registered via Google: {username}")
+        
+    # 4. Generate local JWT
+    jwt_token = create_access_token(data={"sub": user["username"], "role": user.get("role", "user")})
+
+    # 5. Set token trong HTTP-only cookie (an toàn hơn URL param)
+    #    - httponly=True: JS không thể đọc → chống XSS
+    #    - samesite='lax': chống CSRF cơ bản
+    #    - secure=True chỉ bật khi production (HTTPS)
+    is_production = os.getenv("ENVIRONMENT", "development") == "production"
+    response = RedirectResponse("/?google_login=success", status_code=302)
+    response.set_cookie(
+        key="emotionai_token",
+        value=jwt_token,
+        httponly=True,
+        max_age=int(os.getenv("ACCESS_TOKEN_EXPIRE_MINUTES", "1440")) * 60,
+        samesite="lax",
+        secure=is_production
+    )
+    return response
 
 # =====================================================================
 # EMOTION INFO API
@@ -381,7 +576,8 @@ async def get_my_history(
             "pagination": {"page": page, "per_page": per_page, "total": total, "total_pages": max(1, (total + per_page - 1) // per_page)}
         }
     except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
+        logger.error(f"Error fetching user history: {e}")
+        raise HTTPException(status_code=500, detail="Đã xảy ra lỗi khi tải lịch sử. Vui lòng thử lại sau.")
 
 # =====================================================================
 # ADMIN API
@@ -416,7 +612,8 @@ async def get_all_history(
             "pagination": {"page": page, "per_page": per_page, "total": total, "total_pages": max(1, (total + per_page - 1) // per_page)}
         }
     except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
+        logger.error(f"Error fetching all history (Admin): {e}")
+        raise HTTPException(status_code=500, detail="Đã xảy ra lỗi khi tải dữ liệu. Vui lòng thử lại sau.")
 
 @app.delete("/api/history/{record_id}", tags=["Admin"], summary="[Admin] Xóa 1 bản ghi lịch sử")
 async def delete_history_record(record_id: str, current_user: dict = Depends(get_current_admin)):
@@ -427,7 +624,8 @@ async def delete_history_record(record_id: str, current_user: dict = Depends(get
             raise HTTPException(status_code=404, detail="Không tìm thấy bản ghi")
         return {"success": True, "message": "Đã xóa bản ghi"}
     except Exception as e:
-        raise HTTPException(status_code=400, detail=f"ID không hợp lệ: {str(e)}")
+        logger.error(f"Error deleting history record {record_id}: {e}")
+        raise HTTPException(status_code=400, detail="ID bản ghi không hợp lệ hoặc không thể xóa.")
 
 @app.get("/api/users", tags=["Admin"], summary="[Admin] Danh sách tất cả người dùng")
 async def get_users(page: int = 1, per_page: int = 20, current_user: dict = Depends(get_current_admin)):
@@ -444,7 +642,8 @@ async def get_users(page: int = 1, per_page: int = 20, current_user: dict = Depe
             "pagination": {"page": page, "per_page": per_page, "total": total, "total_pages": max(1, (total + per_page - 1) // per_page)}
         }
     except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
+        logger.error(f"Error fetching users list (Admin): {e}")
+        raise HTTPException(status_code=500, detail="Đã xảy ra lỗi khi tải danh sách người dùng. Vui lòng thử lại sau.")
 
 # =====================================================================
 # STATS API (Admin + Cache)
@@ -487,7 +686,8 @@ async def get_stats(current_user: dict = Depends(get_current_admin)):
         _stats_cache["timestamp"] = now
         return data
     except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Lỗi truy vấn: {str(e)}")
+        logger.error(f"Error fetching stats: {e}")
+        raise HTTPException(status_code=500, detail="Lỗi truy xuất dữ liệu thống kê.")
 
 @app.get("/api/stats/trend", tags=["Admin"], summary="[Admin] Xu hướng phân tích 7 ngày gần nhất")
 async def get_trend(current_user: dict = Depends(get_current_admin)):
@@ -503,7 +703,8 @@ async def get_trend(current_user: dict = Depends(get_current_admin)):
             result.append({"date": day.strftime("%d/%m"), "count": count})
         return {"trend": result}
     except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
+        logger.error(f"Error fetching trend data: {e}")
+        raise HTTPException(status_code=500, detail="Lỗi truy xuất dữ liệu xu hướng.")
 
 # =====================================================================
 # HEALTH CHECK
@@ -517,8 +718,8 @@ async def health_check():
     uptime = time.time() - SERVER_START_TIME
     return {
         "status": "ok",
-        "version": "3.1.0",
-        "model_status": "loaded" if analyzer.model is not None else "failed",
+        "version": "3.1.1",
+        "model_status": "loaded" if getattr(analyzer, 'ready', False) else "failed",
         "memory_usage_mb": round(memory_mb, 2),
         "uptime_seconds": round(uptime, 1),
         "time": datetime.now().strftime("%Y-%m-%d %H:%M:%S")

@@ -13,6 +13,10 @@ from fastapi import Depends, HTTPException, status, Request
 from fastapi.security import OAuth2PasswordBearer
 from dotenv import load_dotenv
 import logging
+import smtplib
+from email.message import EmailMessage
+import random
+import string
 
 load_dotenv()
 logger = logging.getLogger(__name__)
@@ -26,6 +30,18 @@ if SECRET_KEY == "CHANGE_ME_USE_PYTHON_SECRETS_TOKEN_HEX_32":
 
 pwd_context = CryptContext(schemes=["bcrypt"], deprecated="auto")
 oauth2_scheme = OAuth2PasswordBearer(tokenUrl="/api/login", auto_error=False)
+
+# =====================================================================
+# TOKEN EXTRACTION (Bearer header "hoặc" HTTP-only cookie)
+# =====================================================================
+from fastapi import Cookie
+
+async def _extract_token(request: Request, bearer_token: str | None) -> str | None:
+    """Lấy token từ Authorization header (Bearer) hoặc cookie 'emotionai_token'.
+    Ưu tiên cookie để hỗ trợ luồng Google OAuth."""
+    if bearer_token:
+        return bearer_token
+    return request.cookies.get("emotionai_token")
 
 # =====================================================================
 # LOGIN RATE LIMITING (brute-force protection)
@@ -44,22 +60,80 @@ def check_login_rate_limit(client_ip: str):
     if len(_login_attempts[client_ip]) >= LOGIN_RATE_LIMIT_REQUESTS:
         raise HTTPException(
             status_code=429,
-            detail=f"Quá nhiều lần đăng nhập thất bại. Vui lòng thử lại sau {LOGIN_RATE_LIMIT_WINDOW // 60} phút."
+            detail="Quá nhiều lần thử đăng nhập. Vui lòng thử lại sau 5 phút."
         )
     _login_attempts[client_ip].append(now)
 
 def clear_login_attempts(client_ip: str):
-    """Xóa record khi đăng nhập thành công."""
-    _login_attempts.pop(client_ip, None)
+    if client_ip in _login_attempts:
+        del _login_attempts[client_ip]
 
 # =====================================================================
-# PASSWORD UTILITIES
+# REGISTER & FORGOT PASSWORD RATE LIMITING
+# =====================================================================
+_register_attempts: dict = defaultdict(list)
+_forgot_pw_attempts: dict = defaultdict(list)
+
+def check_register_rate_limit(client_ip: str):
+    """Giới hạn tạo tài khoản: tối đa 3 lần mỗi 60 phút."""
+    now = time.time()
+    _register_attempts[client_ip] = [t for t in _register_attempts[client_ip] if now - t < 3600]
+    if len(_register_attempts[client_ip]) >= 3:
+        raise HTTPException(status_code=429, detail="Quá nhiều yêu cầu tạo tài khoản. Vui lòng thử lại sau 1 giờ.")
+    _register_attempts[client_ip].append(now)
+
+def check_forgot_password_rate_limit(client_ip: str):
+    """Giới hạn gửi email quên mật khẩu: tối đa 3 lần mỗi 15 phút."""
+    now = time.time()
+    _forgot_pw_attempts[client_ip] = [t for t in _forgot_pw_attempts[client_ip] if now - t < 900]
+    if len(_forgot_pw_attempts[client_ip]) >= 3:
+        raise HTTPException(status_code=429, detail="Quá nhiều yêu cầu cấp lại mật khẩu. Vui lòng thử lại sau 15 phút.")
+    _forgot_pw_attempts[client_ip].append(now)
+
+# =====================================================================
+# UTILS: JWT & PASSWORDS
 # =====================================================================
 def verify_password(plain_password: str, hashed_password: str) -> bool:
     return pwd_context.verify(plain_password, hashed_password)
 
 def get_password_hash(password: str) -> str:
     return pwd_context.hash(password)
+
+# =====================================================================
+# EMAIL & TOKEN UTILITIES
+# =====================================================================
+def generate_reset_token() -> str:
+    """Tạo mã xác nhận 6 chữ số."""
+    return ''.join(random.choices(string.digits, k=6))
+
+def send_reset_email(to_email: str, token: str):
+    """Gửi email chứa mã reset password bằng SMTP."""
+    smtp_server = os.getenv("SMTP_SERVER")
+    smtp_port = int(os.getenv("SMTP_PORT", "587"))
+    smtp_user = os.getenv("SMTP_USER")
+    smtp_pass = os.getenv("SMTP_PASSWORD")
+
+    if not all([smtp_server, smtp_user, smtp_pass]):
+        logger.error("Chưa cấu hình SMTP đầy đủ trong .env!")
+        return False
+
+    msg = EmailMessage()
+    msg.set_content(f"Mã xác nhận để đổi mật khẩu của bạn là: {token}\n\nMã này có hiệu lực trong vòng 15 phút.\nNếu bạn không yêu cầu đổi mật khẩu, vui lòng bỏ qua email này.")
+    msg['Subject'] = 'EmotionAI - Đặt lại mật khẩu'
+    msg['From'] = smtp_user
+    msg['To'] = to_email
+
+    try:
+        server = smtplib.SMTP(smtp_server, smtp_port)
+        server.starttls()
+        server.login(smtp_user, smtp_pass)
+        server.send_message(msg)
+        server.quit()
+        logger.info(f"Đã gửi email khôi phục mật khẩu tới {to_email}")
+        return True
+    except Exception as e:
+        logger.error(f"Lỗi gửi email: {e}")
+        return False
 
 # =====================================================================
 # JWT UTILITIES
@@ -73,8 +147,9 @@ def create_access_token(data: dict, expires_delta: timedelta = None) -> str:
 # =====================================================================
 # DEPENDENCY INJECTION
 # =====================================================================
-async def get_current_user(token: str = Depends(oauth2_scheme)) -> dict:
-    """Lấy thông tin user từ JWT token. Raise 401 nếu không hợp lệ."""
+async def get_current_user(request: Request, token: str = Depends(oauth2_scheme)) -> dict:
+    """Lấy thông tin user từ JWT token (Bearer header hoặc cookie). Raise 401 nếu không hợp lệ."""
+    token = await _extract_token(request, token)
     if not token:
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
@@ -95,8 +170,9 @@ async def get_current_user(token: str = Depends(oauth2_scheme)) -> dict:
             headers={"WWW-Authenticate": "Bearer"},
         )
 
-async def get_optional_user(token: str = Depends(oauth2_scheme)) -> dict | None:
-    """Trả về user nếu có token hợp lệ, None nếu không có. Không raise lỗi."""
+async def get_optional_user(request: Request, token: str = Depends(oauth2_scheme)) -> dict | None:
+    """Trả về user nếu có token hợp lệ (Bearer hoặc cookie), None nếu không có. Không raise lỗi."""
+    token = await _extract_token(request, token)
     if not token:
         return None
     try:

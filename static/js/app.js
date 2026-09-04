@@ -114,6 +114,18 @@
         // Auth Forms
         $('form-login')?.addEventListener('submit', e => handleAuth(e, 'login'));
         $('form-register')?.addEventListener('submit', e => handleAuth(e, 'register'));
+        $('form-forgot-password')?.addEventListener('submit', handleForgot);
+        $('form-reset-password')?.addEventListener('submit', handleReset);
+
+        // Auth Links
+        $('link-forgot-password')?.addEventListener('click', e => { e.preventDefault(); switchAuthTab('forgot'); });
+        $('link-back-login-1')?.addEventListener('click', e => { e.preventDefault(); switchAuthTab('login'); });
+        $('link-back-login-2')?.addEventListener('click', e => { e.preventDefault(); switchAuthTab('login'); });
+        
+        // Google Login
+        $('btn-google-login')?.addEventListener('click', () => {
+            window.location.href = '/api/auth/google/login';
+        });
 
         // Close modal on overlay click
         els.authModal?.addEventListener('click', e => {
@@ -223,8 +235,14 @@
 
         els.tabUploadBtn.classList.toggle('active', tabId === 'upload');
         els.tabCameraBtn.classList.toggle('active', tabId === 'camera');
-        els.tabUpload.classList.toggle('hidden', tabId !== 'upload');
-        els.tabCamera.classList.toggle('hidden', tabId !== 'camera');
+        
+        els.tabUpload.classList.toggle('active', tabId === 'upload');
+        els.tabCamera.classList.toggle('active', tabId === 'camera');
+        
+        // Loại bỏ class hidden nếu có để CSS display: block từ class .active hoạt động
+        els.tabUpload.classList.remove('hidden');
+        els.tabCamera.classList.remove('hidden');
+        
         hideResult();
     }
 
@@ -367,6 +385,7 @@
     }
 
     function hideResult() {
+        els.resultPanel?.classList.remove('visible');
         els.resultPanel?.classList.add('hidden');
         if (els.resultPlaceholder) els.resultPlaceholder.style.display = 'flex';
         state.currentAIResult = null;
@@ -382,6 +401,7 @@
     function displayResult(data) {
         els.resultPlaceholder.style.display = 'none';
         els.resultPanel.classList.remove('hidden');
+        els.resultPanel.classList.add('visible');
 
         const emoConfig = EMOTIONS.find(e => e.key === data.predicted_emotion) || EMOTIONS[4];
 
@@ -507,13 +527,29 @@
     // AUTHENTICATION
     // =========================================================================
     async function checkAuthStatus() {
-        if (!state.token) return;
+        const urlParams = new URLSearchParams(window.location.search);
+        
+        // Luồng mới: Google OAuth redirect về với tham số google_login=success thay vì token
+        if (urlParams.get('google_login') === 'success') {
+            window.history.replaceState({}, document.title, window.location.pathname);
+            showToast('Đăng nhập Google thành công!', 'success');
+        }
+
+        // Luôn thử gọi /api/me để kiểm tra phiên đăng nhập
+        // Nếu dùng Google OAuth, trình duyệt sẽ tự động gửi HTTP-only cookie "emotionai_token"
+        // Nếu dùng đăng nhập thường, ta gửi header Authorization
+        const headers = {};
+        if (state.token) {
+            headers['Authorization'] = `Bearer ${state.token}`;
+        }
+        
         try {
-            const res = await fetch('/api/me', { headers: { 'Authorization': `Bearer ${state.token}` } });
+            const res = await fetch('/api/me', { headers });
             if (res.ok) {
                 state.user = await res.json();
                 updateNavForUser(state.user);
             } else {
+                // Token không hợp lệ hoặc không có session
                 doLogout(false);
             }
         } catch {
@@ -541,10 +577,12 @@
 
     function switchAuthTab(tab) {
         document.querySelectorAll('#auth-form-container [data-tab]').forEach(btn => {
-            btn.classList.toggle('active', btn.dataset.tab === tab);
+            if (btn) btn.classList.toggle('active', btn.dataset.tab === tab);
         });
         $('form-login').classList.toggle('hidden', tab !== 'login');
         $('form-register').classList.toggle('hidden', tab !== 'register');
+        if ($('form-forgot-password')) $('form-forgot-password').classList.toggle('hidden', tab !== 'forgot');
+        if ($('form-reset-password')) $('form-reset-password').classList.toggle('hidden', tab !== 'reset');
     }
 
     async function handleAuth(e, action) {
@@ -560,6 +598,16 @@
         const formData = new FormData();
         formData.append('username', username);
         formData.append('password', password);
+        if (action === 'register') {
+            const email = $('register-email')?.value.trim();
+            if (!email) {
+                showToast('Vui lòng nhập email', 'error');
+                btn.disabled = false;
+                btn.innerText = 'Tạo tài khoản';
+                return;
+            }
+            formData.append('email', email);
+        }
 
         try {
             const res = await fetch(`/api/${action}`, { method: 'POST', body: formData });
@@ -592,6 +640,57 @@
         btn.innerText = action === 'login' ? 'Đăng Nhập' : 'Tạo tài khoản';
     }
 
+    async function handleForgot(e) {
+        e.preventDefault();
+        const email = $('forgot-email').value.trim();
+        if (!email) return;
+        const btn = $('btn-submit-forgot');
+        btn.disabled = true; btn.innerText = 'Đang gửi...';
+        
+        try {
+            const res = await fetch('/api/forgot-password', {
+                method: 'POST', headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ email })
+            });
+            const data = await res.json();
+            if (res.ok) {
+                showToast('Đã gửi mã xác nhận! Vui lòng kiểm tra email.', 'success');
+                switchAuthTab('reset');
+            } else {
+                showToast(data.detail || 'Lỗi gửi email', 'error');
+            }
+        } catch {
+            showToast('Lỗi kết nối mạng', 'error');
+        }
+        btn.disabled = false; btn.innerText = 'Gửi Mã Xác Nhận';
+    }
+
+    async function handleReset(e) {
+        e.preventDefault();
+        const token = $('reset-token').value.trim();
+        const new_password = $('reset-password').value;
+        if (!token || !new_password) return;
+        const btn = $('btn-submit-reset');
+        btn.disabled = true; btn.innerText = 'Đang xử lý...';
+        
+        try {
+            const res = await fetch('/api/reset-password', {
+                method: 'POST', headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ token, new_password })
+            });
+            const data = await res.json();
+            if (res.ok) {
+                showToast('Đổi mật khẩu thành công! Hãy đăng nhập lại.', 'success');
+                switchAuthTab('login');
+            } else {
+                showToast(data.detail || 'Mã xác nhận sai hoặc hết hạn', 'error');
+            }
+        } catch {
+            showToast('Lỗi kết nối mạng', 'error');
+        }
+        btn.disabled = false; btn.innerText = 'Đổi Mật Khẩu';
+    }
+
     function logout() { doLogout(true); }
 
     function doLogout(showMsg = true) {
@@ -601,6 +700,10 @@
         els.authButtons?.classList.remove('hidden');
         els.userMenu?.classList.add('hidden');
         if (els.navAdmin) els.navAdmin.style.display = 'none';
+        
+        // Gọi API để xóa cookie nếu có (sẽ làm ở backend nhưng frontend có thể reset cookie bằng cách báo expired)
+        document.cookie = "emotionai_token=; expires=Thu, 01 Jan 1970 00:00:00 UTC; path=/;";
+        
         if (showMsg) showToast('Đã đăng xuất thành công.', 'info');
     }
 

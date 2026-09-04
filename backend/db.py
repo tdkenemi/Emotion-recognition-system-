@@ -35,6 +35,20 @@ try:
     # Ping to verify connection
     client.admin.command('ping')
     logger.info("MongoDB Connected Successfully!")
+
+    # =====================================================================
+    # CREATE INDEXES
+    # =====================================================================
+    import pymongo
+    
+    # 1. Unique constraints cho users (tránh race condition khi đăng ký)
+    users_collection.create_index("username", unique=True)
+    users_collection.create_index("email", unique=True)
+    
+    # 2. Indexes để tăng tốc truy vấn sắp xếp theo thời gian
+    history_collection.create_index([("time", pymongo.DESCENDING)])
+    feedback_collection.create_index([("time", pymongo.DESCENDING)])
+    logger.info("MongoDB Indexes verified.")
 except Exception as e:
     logger.error(f"MongoDB Connection Error: {e}")
     # We don't exit here so the app can still start, but DB ops will fail gracefully
