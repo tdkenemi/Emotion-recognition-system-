@@ -22,12 +22,12 @@
 > **Hướng dẫn:** Chụp ảnh màn hình web của bạn và lưu vào thư mục `docs/`. Sau đó thay tên file tương ứng vào các đường dẫn bên dưới.
 
 <div align="center">
-  <img src="docs/home.png" alt="Giao diện Trang chủ" width="800"/>
+  <img src="https://github.com/user-attachments/assets/77997d8d-0828-4fdd-8f22-f4fca5d46e75" alt="Giao diện Trang chủ" width="800"/>
   <p><i>Trang chủ - Upload và Phân tích ảnh với DeepFace</i></p>
   
   <br>
 
-  <img src="docs/admin.png" alt="Giao diện Admin Dashboard" width="800"/>
+  <img src="https://github.com/user-attachments/assets/816abb06-a14c-4048-843e-090832d8ca98" alt="Giao diện Admin Dashboard" width="800"/>
   <p><i>Admin Dashboard - Biểu đồ thống kê thời gian thực</i></p>
 </div>
 
